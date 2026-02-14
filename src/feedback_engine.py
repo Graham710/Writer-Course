@@ -59,10 +59,19 @@ def _fallback_report(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, o
     objective_hits = sum(1 for term in objective_terms if term and term in draft_lower)
 
     lines = [line.strip() for line in re.split(r"\n+", text) if line.strip()]
-    concept = min(100, 35 + objective_hits)
-    narrative = min(100, 20 + min(90, len(lines) * 3) + (10 if text else 0))
-    language = min(100, 28 + int(len(set(text.split())) * 0.3) + (8 if any(word in draft_lower for word in ["show", "scene", "voice", "tone"]) else 0))
-    revision = min(100, 14 + len(lines) * 2 + (12 if len(text) > 200 else 0))
+    words = re.findall(r"\b[a-z']+\b", draft_lower)
+    unique_words = len(set(words))
+    line_count = len(lines)
+
+    concept = min(100, 30 + objective_hits + min(40, line_count * 4))
+    narrative = min(100, 15 + min(90, len(words)) + (8 if line_count >= 3 else 0))
+    language = min(
+        100,
+        22
+        + int(unique_words * 0.35)
+        + (10 if any(word in draft_lower for word in ["scene", "detail", "voice", "show", "saw", "heard"]) else 0),
+    )
+    revision = min(100, 18 + len(lines) * 3 + (8 if len(text) > 240 else 0))
     rubric = {
         "concept_application": concept,
         "narrative_effectiveness": narrative,
@@ -81,26 +90,57 @@ def _fallback_report(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, o
 
     line_notes = []
     for idx, line in enumerate(lines[:3], start=1):
+        if idx == 1:
+            comment = f"Anchor this opening with location/time and perspective before broader claims. ({citation})"
+        elif idx == 2:
+            comment = f"Convert abstract language here into observable action tied to stakes. ({citation})"
+        else:
+            comment = f"Check whether this line keeps the same point of view and pressure. ({citation})"
+
         line_notes.append(
             LineNote(
                 line_number=idx,
                 text_excerpt=line[:120],
-                comment=f"Check if this line supports the unit goals more directly. ({citation})",
+                comment=comment,
                 citation=citation,
             )
         )
 
-    strengths = [
-        f"The draft shows craft effort and can be improved by adding precise scene anchors. ({citation})",
-    ]
-    risks = [
-        f"Some transitions are broad and may blur focus; tighten around concrete moments. ({citation})",
-    ]
+    strengths = []
+    if line_count >= 3:
+        strengths.append(f"The draft has a readable beat flow that can support revision work. ({citation})")
+    if any(word in draft_lower for word in ["scene", "detail", "voice", "character", "perspective"]):
+        strengths.append(f"You already use concrete craft signals that readers can follow. ({citation})")
+    if objective_hits > 0:
+        strengths.append(f"Draft language maps to unit vocabulary in places. ({citation})")
+    if not strengths:
+        strengths.append(f"The draft has a clear direction and is ready for focused revision passes. ({citation})")
+
+    risks = []
+    if line_count < 3:
+        risks.append(f"The draft may be too short for a full scene; add one more concrete beat. ({citation})")
+    if objective_hits == 0:
+        risks.append(f"Alignment with the unit goal is weak; restate one objective in scene terms. ({citation})")
+    if not any(word in draft_lower for word in ["show", "showed", "saw", "heard", "felt", "replied"]):
+        risks.append(f"Many moves are abstract; replace summary sentences with physical or behavioral detail. ({citation})")
+    if not risks:
+        risks.append(f"Line transitions need one clearer shift of stakes or perspective to avoid repetition. ({citation})")
+
     revision_plan = [
-        "Cut one generalized sentence and replace with scene detail.",
-        "Add one more internal beat that changes the reader's expectation.",
-        "Read once and mark lines that are not tied to action or perspective.",
+        f"Add an opening anchor: who is present, where, and what changes within the scene. ({citation})",
+        f"Replace one generalized line with a direct action or sensory detail. ({citation})",
+        f"Keep one perspective for the scene and remove any sentence that drifts into a different one. ({citation})",
     ]
+    if objective_hits == 0:
+        revision_plan.insert(
+            0,
+            f"Rewrite one line to include a key unit objective term. ({citation})",
+        )
+    if line_count >= 5:
+        revision_plan.append(
+            "Mark every sentence as setup, action, or consequence and remove anything that fits none. "
+            f"({citation})"
+        )
 
     return FeedbackReport(
         overall_score=overall,
@@ -284,7 +324,9 @@ Return JSON with this exact schema:
 
 Rules:
 - Use only unit context and do not use external writing theory.
-- Every strength, risk, and note should include a citation in the form (p.NUM).
+- Return JSON only; no wrapper text.
+- Provide 2-3 strengths, 2-3 risks, and 3-5 revision items.
+- Every strength, risk, note, and revision item must include at least one citation in the form (p.NUM).
 - numeric scores must be 0-100.
 - overall_score is weighted concept_application 35, narrative 30, language 20, revision 15.
 """

@@ -17,9 +17,9 @@ RAW_UNITS = [
         "start_page": 7,
         "end_page": 15,
         "learning_objectives": [
-            "Understand how the course is organized and what each chapter teaches",
-            "Identify the book's vocabulary of craft terms",
-            "Track how fiction can be evaluated through close reading",
+            "Map the course sequence to the specific craft skill you will practice each week.",
+            "Use the unit vocabulary to diagnose what is working and what still needs attention.",
+            "Set a clear workflow: draft, revise, and reflect on one improvement before moving forward.",
         ],
     },
     {
@@ -28,9 +28,9 @@ RAW_UNITS = [
         "start_page": 16,
         "end_page": 34,
         "learning_objectives": [
-            "Differentiate narrative perspective and focalization",
-            "Practice choosing a useful narrative distance",
-            "Keep readers oriented while revealing character through detail",
+            "Anchor each draft in one focal perspective and keep it stable across the scene.",
+            "Balance what the reader sees, hears, and knows at each moment.",
+            "Maintain orientation through concrete scene grounding instead of backstory explanation.",
         ],
     },
     {
@@ -39,9 +39,9 @@ RAW_UNITS = [
         "start_page": 35,
         "end_page": 39,
         "learning_objectives": [
-            "Describe how form and voice interact in modern prose",
-            "Recognize modern narrative pressure away from simple plot first",
-            "Borrow useful revision habits from classic realism",
+            "Track when voice narrows or expands to create distance and emotional pressure.",
+            "Prioritize scene-based movement over summary so revision decisions stay concrete.",
+            "Use paragraph shape to make cause, reaction, and consequence visible.",
         ],
     },
     {
@@ -50,9 +50,9 @@ RAW_UNITS = [
         "start_page": 40,
         "end_page": 46,
         "learning_objectives": [
-            "Explain the flaneur viewpoint and observational prose",
-            "Use scene-level movement to carry character meaning",
-            "Balance wandering perception with scene control",
+            "Build observational prose that records action before interpretation.",
+            "Let detail and movement carry character judgment instead of abstract labels.",
+            "Keep attention directed even when the scene perspective drifts.",
         ],
     },
     {
@@ -61,9 +61,9 @@ RAW_UNITS = [
         "start_page": 47,
         "end_page": 63,
         "learning_objectives": [
-            "Use concrete details to guide attention and meaning",
-            "Distinguish useful detail from decorative texture",
-            "Use objects and setting to signal internal state",
+            "Choose details that perform a specific narrative job.",
+            "Remove descriptive weight that does not change tension or decision.",
+            "Attach setting and objects directly to character pressure and motive.",
         ],
     },
     {
@@ -72,9 +72,9 @@ RAW_UNITS = [
         "start_page": 64,
         "end_page": 84,
         "learning_objectives": [
-            "Build character through behavior and perception",
-            "Avoid summary-based character shortcuts",
-            "Let voice, detail, and action create contradictions",
+            "Reveal character through choice, gesture, and response in pressure points.",
+            "Replace explanatory traits with observable contradiction.",
+            "Use voice and detail to make motivation feel earned.",
         ],
     },
     {
@@ -83,9 +83,9 @@ RAW_UNITS = [
         "start_page": 85,
         "end_page": 99,
         "learning_objectives": [
-            "Map how interior attention shifts across scenes",
-            "Write with controlled interiority without confusion",
-            "Track sentence rhythm to reflect thought movement",
+            "Track shifts in awareness from sensation to thought to decision.",
+            "Keep interior perspective legible through line breaks, rhythm, and focus words.",
+            "Make each cognitive turn in a sentence create a clear change of direction.",
         ],
     },
     {
@@ -94,9 +94,9 @@ RAW_UNITS = [
         "start_page": 100,
         "end_page": 108,
         "learning_objectives": [
-            "Understand how scenes and transitions shape reader expectation",
-            "Use form to control temporal pressure",
-            "Test multiple orderings without losing coherence",
+            "Shape scene order to escalate expectation and release.",
+            "Use transitions to control time, causality, and point of view.",
+            "Experiment with rearrangement while preserving narrative clarity.",
         ],
     },
     {
@@ -105,9 +105,9 @@ RAW_UNITS = [
         "start_page": 109,
         "end_page": 114,
         "learning_objectives": [
-            "Balance empathy with moral and psychological complexity",
-            "Avoid sentimentality in emotional pivots",
-            "Keep characters specific instead of generalized",
+            "Generate sympathy through behavior and consequence, not moral explanation.",
+            "Introduce conflict inside the emotion of a scene, not as editorial commentary.",
+            "Hold compassion and uncertainty together in the same scene.",
         ],
     },
     {
@@ -116,9 +116,9 @@ RAW_UNITS = [
         "start_page": 115,
         "end_page": 130,
         "learning_objectives": [
-            "Shape sentences for tonal control and timing",
-            "Use diction to separate narration and character consciousness",
-            "Keep imagery purposeful and repeatable across draft passes",
+            "Use sentence tempo to control urgency, delay, and tonal distance.",
+            "Differentiate narration, character voice, and implied perspective with diction.",
+            "Keep imagery focused and reusable across revisions.",
         ],
     },
     {
@@ -127,9 +127,9 @@ RAW_UNITS = [
         "start_page": 131,
         "end_page": 135,
         "learning_objectives": [
-            "Write dialogue that reveals social distance and power",
-            "Use silence, interruption, and mismatch for realism",
-            "Embed dialogue in scene context instead of isolated lines",
+            "Write dialogue that shifts power, reveals motive, or changes stakes.",
+            "Use interruption, overlap, and silence as functional scene decisions.",
+            "Root every exchange in physical detail and immediate tension.",
         ],
     },
     {
@@ -138,9 +138,9 @@ RAW_UNITS = [
         "start_page": 136,
         "end_page": 149,
         "learning_objectives": [
-            "Define the trade-off between literal truth and narrative truth",
-            "Use convention with control instead of habit",
-            "Make the reader trust fiction through precision",
+            "Balance factual fact and emotional truth without overexplaining either.",
+            "Select convention as a deliberate structural choice, not a default crutch.",
+            "Earn trust through precise, selective revelation across scenes.",
         ],
     },
 ]

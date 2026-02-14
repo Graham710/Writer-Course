@@ -7,7 +7,7 @@ This is a local-first Streamlit app built around the book *How Fiction Works*.
 - One-unit-at-a-time guided flow.
 - Practice prompts in each unit.
 - GPT-5.2 feedback with rubric scores and line-level notes.
-- Locking and unlock flow based on a score threshold of 85.
+- Unit unlock flow advances by submitted attempt rather than score threshold.
 - Local SQLite progress persistence for drafts, feedback, and coach chat.
 - PDF-only lesson, exercise, and coach scope.
 
@@ -50,4 +50,4 @@ streamlit run app.py
 
 ## Notes
 
-The first AI action requires `OPENAI_API_KEY`. Without it, the app still runs and allows draft editing and history viewing, but feedback and coach actions are blocked with a setup warning.
+The first AI action requires `OPENAI_API_KEY` for live model scoring. Without it, the app still runs and uses local fallback feedback and coach responses sourced from course context.
