@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List
 
 from .config import db_path
-from .types import ChatTurn, FeedbackReport, ProgressRecord
+from .types import ChatTurn, FeedbackReport, ProgressRecord, RevisionMission
 
 
 def _connection(path=None):
@@ -16,6 +16,18 @@ def _connection(path=None):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column_definition: str) -> None:
+    column_name = column_definition.split()[0]
+    if column_name in _table_columns(conn, table):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_definition}")
 
 
 def init_db(conn=None):
@@ -54,8 +66,26 @@ def init_db(conn=None):
             created_at TEXT NOT NULL,
             citations TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS revision_missions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            unit_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            focus_dimension TEXT NOT NULL,
+            title TEXT NOT NULL,
+            instructions TEXT NOT NULL,
+            checklist_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
         """
     )
+
+    # Migration-safe additions for existing DBs.
+    _ensure_column(conn, "chat_turns", "evidence_json TEXT")
+    _ensure_column(conn, "chat_turns", "confidence REAL")
+
     conn.commit()
 
 
@@ -149,19 +179,19 @@ def _next_unit_id(unit_id: str, all_units: List[str]) -> str | None:
     return all_units[idx + 1]
 
 
-def add_feedback_attempt(
+def add_feedback_attempt_with_id(
     progress: ProgressRecord,
     unit_id: str,
     draft: str,
     report: FeedbackReport,
     all_unit_ids: List[str],
-) -> ProgressRecord:
-    """Record an attempt and unlock the next unit on the submission."""
+) -> tuple[ProgressRecord, int]:
+    """Record an attempt and return updated progress with inserted attempt id."""
 
     conn = _connection()
     init_db(conn)
     now = datetime.utcnow().isoformat()
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO attempts (unit_id, draft, overall_score, feedback_json, created_at) VALUES (?, ?, ?, ?, ?)",
         (unit_id, draft, report.overall_score, json.dumps(report.to_dict()), now),
     )
@@ -181,6 +211,26 @@ def add_feedback_attempt(
     persist_progress(progress, conn=conn)
     conn.commit()
     conn.close()
+    attempt_id = int(cursor.lastrowid or 0)
+    return progress, attempt_id
+
+
+def add_feedback_attempt(
+    progress: ProgressRecord,
+    unit_id: str,
+    draft: str,
+    report: FeedbackReport,
+    all_unit_ids: List[str],
+) -> ProgressRecord:
+    """Record an attempt and unlock the next unit on the submission."""
+
+    progress, _attempt_id = add_feedback_attempt_with_id(
+        progress=progress,
+        unit_id=unit_id,
+        draft=draft,
+        report=report,
+        all_unit_ids=all_unit_ids,
+    )
     return progress
 
 
@@ -233,16 +283,42 @@ def get_latest_feedback_for_unit(unit_id: str) -> FeedbackReport | None:
     return FeedbackReport.from_dict(json.loads(attempts[0]["feedback_json"]))
 
 
-def save_chat_turn(unit_id: str, question: str, answer: str, citations: List[str] | None = None) -> None:
+def _serialize_evidence(evidence: List[dict] | None) -> str:
+    return json.dumps(evidence or [])
+
+
+def _deserialize_json_list(raw: object) -> List[object]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, list) else []
+    except Exception:
+        return []
+
+
+def save_chat_turn(
+    unit_id: str,
+    question: str,
+    answer: str,
+    citations: List[str] | None = None,
+    evidence: List[dict] | None = None,
+    confidence: float | None = None,
+) -> None:
     """Persist a coach interaction turn."""
 
     conn = _connection()
     init_db(conn)
     citations_json = json.dumps(citations or [])
+    evidence_json = _serialize_evidence(evidence)
     now = datetime.utcnow().isoformat()
     conn.execute(
-        "INSERT INTO chat_turns (unit_id, question, answer, created_at, citations) VALUES (?, ?, ?, ?, ?)",
-        (unit_id, question, answer, now, citations_json),
+        "INSERT INTO chat_turns (unit_id, question, answer, created_at, citations, evidence_json, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (unit_id, question, answer, now, citations_json, evidence_json, confidence),
     )
     conn.commit()
     conn.close()
@@ -253,12 +329,151 @@ def get_chat_turns(unit_id: str, limit: int | None = None) -> List[Dict[str, obj
 
     conn = _connection()
     init_db(conn)
-    q = "SELECT question, answer, created_at, citations FROM chat_turns WHERE unit_id = ? ORDER BY id DESC"
+    q = (
+        "SELECT question, answer, created_at, citations, evidence_json, confidence "
+        "FROM chat_turns WHERE unit_id = ? ORDER BY id DESC"
+    )
     if limit:
         q += f" LIMIT {int(limit)}"
     rows = conn.execute(q, (unit_id,)).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+
+    payload: List[Dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        item["citations"] = [str(value) for value in _deserialize_json_list(item.get("citations"))]
+        evidence_list = _deserialize_json_list(item.get("evidence_json"))
+        item["evidence"] = [value for value in evidence_list if isinstance(value, dict)]
+        payload.append(item)
+    return payload
+
+
+def save_revision_mission(mission: RevisionMission) -> RevisionMission:
+    """Insert or update a revision mission and return the persisted model."""
+
+    conn = _connection()
+    init_db(conn)
+    payload = mission.to_dict()
+    checklist_json = json.dumps(payload.get("checklist", []))
+
+    if mission.id is None:
+        cursor = conn.execute(
+            """
+            INSERT INTO revision_missions (
+                unit_id, attempt_id, focus_dimension, title, instructions, checklist_json,
+                status, created_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission.unit_id,
+                mission.attempt_id,
+                mission.focus_dimension,
+                mission.title,
+                mission.instructions,
+                checklist_json,
+                mission.status,
+                mission.created_at,
+                mission.completed_at,
+            ),
+        )
+        mission.id = int(cursor.lastrowid or 0)
+    else:
+        conn.execute(
+            """
+            UPDATE revision_missions
+            SET unit_id = ?, attempt_id = ?, focus_dimension = ?, title = ?,
+                instructions = ?, checklist_json = ?, status = ?, created_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                mission.unit_id,
+                mission.attempt_id,
+                mission.focus_dimension,
+                mission.title,
+                mission.instructions,
+                checklist_json,
+                mission.status,
+                mission.created_at,
+                mission.completed_at,
+                mission.id,
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+    return mission
+
+
+def _mission_from_row(row: sqlite3.Row) -> RevisionMission:
+    return RevisionMission(
+        id=int(row["id"]),
+        unit_id=str(row["unit_id"]),
+        attempt_id=int(row["attempt_id"]),
+        focus_dimension=str(row["focus_dimension"]),
+        title=str(row["title"]),
+        instructions=str(row["instructions"]),
+        checklist=[str(item) for item in _deserialize_json_list(row["checklist_json"])],
+        status=str(row["status"]),
+        created_at=str(row["created_at"]),
+        completed_at=str(row["completed_at"]) if row["completed_at"] is not None else None,
+    )
+
+
+def get_active_revision_mission(unit_id: str) -> RevisionMission | None:
+    """Return the latest active revision mission for one unit."""
+
+    conn = _connection()
+    init_db(conn)
+    row = conn.execute(
+        """
+        SELECT id, unit_id, attempt_id, focus_dimension, title, instructions,
+               checklist_json, status, created_at, completed_at
+        FROM revision_missions
+        WHERE unit_id = ? AND status = 'active'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (unit_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return _mission_from_row(row)
+
+
+def complete_revision_mission(mission_id: int) -> None:
+    """Mark one revision mission as completed."""
+
+    conn = _connection()
+    init_db(conn)
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        "UPDATE revision_missions SET status = 'completed', completed_at = ? WHERE id = ?",
+        (now, mission_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def supersede_active_revision_missions(unit_id: str, new_attempt_id: int) -> int:
+    """Mark existing active missions for a unit as superseded."""
+
+    _ = new_attempt_id  # Explicitly keep API intention for audit/debug call sites.
+
+    conn = _connection()
+    init_db(conn)
+    now = datetime.utcnow().isoformat()
+    cursor = conn.execute(
+        """
+        UPDATE revision_missions
+        SET status = 'superseded', completed_at = ?
+        WHERE unit_id = ? AND status = 'active'
+        """,
+        (now, unit_id),
+    )
+    conn.commit()
+    conn.close()
+    return int(cursor.rowcount or 0)
 
 
 def get_all_attempts() -> List[Dict[str, object]]:

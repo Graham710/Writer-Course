@@ -49,6 +49,10 @@ def exercises_path() -> Path:
     return data_dir() / "exercises.json"
 
 
+def lesson_packs_path() -> Path:
+    return data_dir() / "lesson_packs.json"
+
+
 def db_path() -> Path:
     return Path(os.getenv("WRITER_COURSE_DB_PATH", str(_project_root() / "writer_course_state.db")))
 

@@ -80,6 +80,69 @@ class ExerciseSpec:
 
 
 @dataclass
+class LessonIdea:
+    text: str
+    citation: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "LessonIdea":
+        if payload is None:
+            return cls(text="", citation="p.0")
+        return cls(
+            text=str(payload.get("text", "")),
+            citation=str(payload.get("citation", "p.0")),
+        )
+
+
+@dataclass
+class LessonPack:
+    unit_id: str
+    summary: str
+    key_ideas: List[LessonIdea]
+    pitfalls: List[LessonIdea]
+    reflection_questions: List[str]
+    micro_drills: List[str]
+    source_mode: str = "fallback_local"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "summary": self.summary,
+            "key_ideas": [item.to_dict() for item in self.key_ideas],
+            "pitfalls": [item.to_dict() for item in self.pitfalls],
+            "reflection_questions": list(self.reflection_questions),
+            "micro_drills": list(self.micro_drills),
+            "source_mode": self.source_mode,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "LessonPack":
+        payload = payload or {}
+        key_ideas = payload.get("key_ideas", [])
+        pitfalls = payload.get("pitfalls", [])
+        return cls(
+            unit_id=str(payload.get("unit_id", "")),
+            summary=str(payload.get("summary", "")),
+            key_ideas=[
+                item if isinstance(item, LessonIdea) else LessonIdea.from_dict(item)
+                for item in key_ideas
+                if isinstance(item, (dict, LessonIdea))
+            ],
+            pitfalls=[
+                item if isinstance(item, LessonIdea) else LessonIdea.from_dict(item)
+                for item in pitfalls
+                if isinstance(item, (dict, LessonIdea))
+            ],
+            reflection_questions=[str(item) for item in payload.get("reflection_questions", [])],
+            micro_drills=[str(item) for item in payload.get("micro_drills", [])],
+            source_mode=str(payload.get("source_mode", "fallback_local")),
+        )
+
+
+@dataclass
 class FeedbackReport:
     overall_score: int
     rubric_scores: Dict[str, int]
@@ -112,6 +175,42 @@ class FeedbackReport:
 
 
 @dataclass
+class RevisionMission:
+    id: Optional[int]
+    unit_id: str
+    attempt_id: int
+    focus_dimension: str
+    title: str
+    instructions: str
+    checklist: List[str]
+    status: str = "active"
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    completed_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "RevisionMission":
+        payload = payload or {}
+        mission_id = payload.get("id")
+        return cls(
+            id=int(mission_id) if mission_id is not None else None,
+            unit_id=str(payload.get("unit_id", "")),
+            attempt_id=int(payload.get("attempt_id", 0)),
+            focus_dimension=str(payload.get("focus_dimension", "")),
+            title=str(payload.get("title", "")),
+            instructions=str(payload.get("instructions", "")),
+            checklist=[str(item) for item in payload.get("checklist", [])],
+            status=str(payload.get("status", "active")),
+            created_at=str(payload.get("created_at", datetime.utcnow().isoformat())),
+            completed_at=(
+                str(payload.get("completed_at")) if payload.get("completed_at") is not None else None
+            ),
+        )
+
+
+@dataclass
 class ProgressRecord:
     current_unit_id: str
     unlocked_units: List[str]
@@ -134,13 +233,94 @@ class ProgressRecord:
 
 
 @dataclass
+class CoachEvidence:
+    quote: str
+    citation: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "CoachEvidence":
+        payload = payload or {}
+        return cls(
+            quote=str(payload.get("quote", "")),
+            citation=str(payload.get("citation", "p.0")),
+        )
+
+
+@dataclass
+class CoachAnswer:
+    answer: str
+    citations: List[str]
+    evidence: List[CoachEvidence]
+    confidence: float
+    is_refusal: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "answer": self.answer,
+            "citations": list(self.citations),
+            "evidence": [item.to_dict() for item in self.evidence],
+            "confidence": self.confidence,
+            "is_refusal": self.is_refusal,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "CoachAnswer":
+        payload = payload or {}
+        return cls(
+            answer=str(payload.get("answer", "")),
+            citations=[str(item) for item in payload.get("citations", [])],
+            evidence=[
+                item if isinstance(item, CoachEvidence) else CoachEvidence.from_dict(item)
+                for item in payload.get("evidence", [])
+                if isinstance(item, (dict, CoachEvidence))
+            ],
+            confidence=float(payload.get("confidence", 0.0) or 0.0),
+            is_refusal=bool(payload.get("is_refusal", False)),
+        )
+
+
+@dataclass
 class ChatTurn:
     unit_id: str
     question: str
     answer: str
-    citations: List[str]
+    citations: List[str] = field(default_factory=list)
+    evidence: List[CoachEvidence] = field(default_factory=list)
+    confidence: Optional[float] = None
 
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {
+            "unit_id": self.unit_id,
+            "question": self.question,
+            "answer": self.answer,
+            "citations": list(self.citations),
+            "evidence": [item.to_dict() for item in self.evidence],
+            "confidence": self.confidence,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "ChatTurn":
+        payload = payload or {}
+        return cls(
+            unit_id=str(payload.get("unit_id", "")),
+            question=str(payload.get("question", "")),
+            answer=str(payload.get("answer", "")),
+            citations=[str(item) for item in payload.get("citations", [])],
+            evidence=[
+                item if isinstance(item, CoachEvidence) else CoachEvidence.from_dict(item)
+                for item in payload.get("evidence", [])
+                if isinstance(item, (dict, CoachEvidence))
+            ],
+            confidence=(
+                float(payload.get("confidence"))
+                if payload.get("confidence") is not None
+                else None
+            ),
+            created_at=str(payload.get("created_at", datetime.utcnow().isoformat())),
+        )

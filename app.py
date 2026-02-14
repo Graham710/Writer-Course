@@ -4,31 +4,110 @@ from __future__ import annotations
 
 import difflib
 import json
+import html
 from typing import Dict, List
 
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import coach_engine, feedback_engine, storage
+from src import coach_engine, feedback_engine, lesson_engine, revision_engine, storage
 from src.config import has_openai_api_key
 from src.exercise_engine import load_or_build_exercises
 from src.pdf_ingest import chunks_by_unit, load_or_build_chunks
-from src.types import CourseUnit, FeedbackReport
+from src.types import CourseUnit, FeedbackReport, LessonPack, RevisionMission
 from src.unit_catalog import load_units
 
 
 st.set_page_config(page_title="Writer Course", page_icon="✍️", layout="wide")
 
 
+def _inject_app_style() -> None:
+    """Inject lightweight visual styling for a cleaner lesson experience."""
+
+    st.markdown(
+        """
+        <style>
+        .wc-chip {
+            display: inline-block;
+            padding: 0.15rem 0.55rem;
+            margin-right: 0.35rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .wc-chip-muted { background: #eef2ff; color: #2e4480; }
+        .wc-chip-ok { background: #e8f5ee; color: #1c5f3f; }
+        .wc-chip-warn { background: #fff0d4; color: #7d4f00; }
+        .wc-chip-alert { background: #ffe6e6; color: #7d0d0d; }
+        .wc-chip-info { background: #e6f2fb; color: #104b77; }
+        .wc-citation { color: #4f5d75; font-size: 0.88rem; font-style: italic; }
+        .wc-list-item {
+            margin-bottom: 0.45rem;
+            padding: 0.35rem 0.5rem;
+            border-left: 2px solid #d2d7e7;
+            border-radius: 0.35rem;
+        }
+        .wc-passages p { margin-bottom: 0.5rem; }
+        .wc-evidence {
+            border-left: 3px solid #c0d2ea;
+            padding: 0.45rem 0.6rem;
+            margin: 0.28rem 0;
+            border-radius: 0.35rem;
+            background: #f7f9fc;
+        }
+        .wc-small {
+            color: #4d5a72;
+            font-size: 0.88rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _pill(label: str, tone: str = "muted") -> str:
+    """Render a small muted badge."""
+
+    safe_label = html.escape(label)
+    return f"<span class='wc-chip wc-chip-{tone}'> {safe_label} </span>"
+
+
+def _confidence_label(confidence: float | None) -> str:
+    if confidence is None:
+        return "Unknown"
+    if confidence >= 0.8:
+        return "High"
+    if confidence >= 0.55:
+        return "Medium"
+    return "Low"
+
+
+def _confidence_tone(confidence: float | None) -> str:
+    if confidence is None:
+        return "muted"
+    if confidence >= 0.8:
+        return "ok"
+    if confidence >= 0.55:
+        return "warn"
+    return "alert"
+
+
 @st.cache_resource
-def _load_assets() -> tuple[List[CourseUnit], list[dict], Dict[str, List[dict]]]:
-    """Load course units, chunks, and exercises with Streamlit cache."""
+def _load_assets() -> tuple[
+    List[CourseUnit],
+    list[dict],
+    Dict[str, List[dict]],
+    Dict[str, LessonPack],
+]:
+    """Load course units, chunks, exercises, and lesson packs with cache."""
 
     units = load_units()
     all_chunks = load_or_build_chunks(units)
     unit_chunks = {unit.id: chunks_by_unit(unit, all_chunks) for unit in units}
     exercise_map = load_or_build_exercises(units, unit_chunks)
-    return units, all_chunks, exercise_map
+    lesson_pack_map = lesson_engine.load_or_build_lesson_packs(units, unit_chunks)
+    return units, all_chunks, exercise_map, lesson_pack_map
 
 
 def _render_home_progress(unit_ids: List[str], best_scores: Dict[str, int]) -> None:
@@ -38,35 +117,87 @@ def _render_home_progress(unit_ids: List[str], best_scores: Dict[str, int]) -> N
         st.info("No units loaded yet.")
         return
 
-    data = {f"Unit {unit_id}": [best_scores.get(unit_id, 0)] for unit_id in unit_ids}
-    st.bar_chart(data)
+    with st.container(border=True):
+        data = {f"Unit {unit_id}": [best_scores.get(unit_id, 0)] for unit_id in unit_ids}
+        st.bar_chart(data)
 
 
-def _render_lesson(unit: CourseUnit, chunks: List[dict]) -> None:
+def _render_lesson(unit: CourseUnit, chunks: List[dict], lesson_pack: LessonPack | None) -> None:
     """Render the lesson tab for a selected unit."""
 
     st.subheader(f"Learn: {unit.title}")
-    st.markdown("**Course scope:** Use only unit pages and cited passages.")
+    st.markdown(
+        " ".join(
+            [
+                _pill("Scope: PDF-only"),
+                _pill("Citations required"),
+                _pill("Evidence from unit pages"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
 
-    key_concepts = unit.learning_objectives or ["No learning objectives loaded."]
-    st.markdown("### Key Concepts")
-    for concept in key_concepts:
-        st.markdown(f"- {concept}")
+    if lesson_pack is not None:
+        with st.container(border=True):
+            st.markdown("### Unit Summary")
+            st.write(lesson_pack.summary)
+
+        with st.container(border=True):
+            st.markdown("### Key Ideas")
+            for item in lesson_pack.key_ideas:
+                st.markdown(
+                    f"<div class='wc-list-item'>"
+                    f"<div>{html.escape(item.text)}</div>"
+                    f"<span class='wc-citation'>{html.escape(item.citation)}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        with st.container(border=True):
+            st.markdown("### Common Pitfalls")
+            for item in lesson_pack.pitfalls:
+                st.markdown(
+                    f"<div class='wc-list-item'>"
+                    f"<div>{html.escape(item.text)}</div>"
+                    f"<span class='wc-citation'>{html.escape(item.citation)}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        with st.container(border=True):
+            st.markdown("### Reflection Questions")
+            for question in lesson_pack.reflection_questions:
+                st.markdown(f"- {html.escape(question)}")
+
+        with st.container(border=True):
+            st.markdown("### Micro Drills")
+            for drill in lesson_pack.micro_drills:
+                st.markdown(f"- {html.escape(drill)}")
+
+        st.caption(f"Lesson pack source: {lesson_pack.source_mode}")
+    else:
+        key_concepts = unit.learning_objectives or ["No learning objectives loaded."]
+        with st.container(border=True):
+            st.markdown("### Key Concepts")
+            for concept in key_concepts:
+                st.markdown(f"- {html.escape(concept)}")
 
     if not chunks:
         st.warning("No lesson passages were extracted for this unit yet.")
         return
 
     st.markdown("### Cited Passage Examples")
-    for chunk in chunks[:3]:
+    passage_cols = st.columns(min(3, len(chunks[:3])))
+    for index, chunk in enumerate(chunks[:3]):
         page = chunk.get("page", "?")
         text = str(chunk.get("text", ""))[:800]
-        with st.expander(f"Page {page} citation"):
-            st.markdown(f"{text} (p.{page})")
-
-    st.markdown("### Unit Summary")
-    combined = " ".join(str(chunk.get("text", "")) for chunk in chunks[:3]).strip()
-    st.write(combined[:1200] + ("..." if len(combined) > 1200 else ""))
+        with passage_cols[index % len(passage_cols)]:
+            with st.expander(f"Page {page} citation"):
+                st.markdown(
+                    f"<div class='wc-passages'><p>{html.escape(text)}</p>"
+                    f"<span class='wc-citation'>p.{page}</span></div>",
+                    unsafe_allow_html=True,
+                )
 
 
 def _exercise_card(unit_id: str, exercises_by_kind: List, kind: str) -> None:
@@ -77,13 +208,17 @@ def _exercise_card(unit_id: str, exercises_by_kind: List, kind: str) -> None:
         st.info("No exercise available for this slot yet.")
         return
 
-    st.markdown(f"### {kind.title()} Exercise")
-    st.markdown(spec.prompt)
-    st.markdown("- Source mode: " + spec.source_mode)
-    st.markdown(f"- Timebox: {spec.timebox_minutes} minutes")
-    st.markdown("**Success criteria:**")
-    for item in spec.success_criteria:
-        st.markdown(f"- {item}")
+    with st.container(border=True):
+        st.markdown(f"### {kind.title()} Exercise")
+        st.markdown(spec.prompt)
+        st.markdown(
+            f"{_pill('Source: ' + spec.source_mode, 'info')} "
+            f"{_pill(f'Timebox: {spec.timebox_minutes} min', 'muted')}",
+            unsafe_allow_html=True,
+        )
+        st.markdown("**Success criteria:**")
+        for item in spec.success_criteria:
+            st.markdown(f"- {html.escape(item)}")
 
 
 def _build_rubric_radar(rubric_scores: Dict[str, int]) -> go.Figure:
@@ -95,7 +230,12 @@ def _build_rubric_radar(rubric_scores: Dict[str, int]) -> go.Figure:
         "Language Precision",
         "Revision Readiness",
     ]
-    values = [rubric_scores.get("concept_application", 0), rubric_scores.get("narrative_effectiveness", 0), rubric_scores.get("language_precision", 0), rubric_scores.get("revision_readiness", 0)]
+    values = [
+        rubric_scores.get("concept_application", 0),
+        rubric_scores.get("narrative_effectiveness", 0),
+        rubric_scores.get("language_precision", 0),
+        rubric_scores.get("revision_readiness", 0),
+    ]
     values += [values[0]]
     labels += [labels[0]]
 
@@ -175,37 +315,79 @@ def _show_feedback_unit(unit_id: str, attempts: List[dict]) -> None:
 
     latest = attempts[0]
     report = FeedbackReport.from_dict(json.loads(latest["feedback_json"]))
-    st.metric("Overall Score", f"{report.overall_score} / 100")
-    st.progress(min(report.overall_score, 100) / 100)
+    score_label = f"{report.overall_score} / 100"
+    unlock_label = "Unlocked" if report.unlock_eligible else "Locked"
+    unlock_tone = "ok" if report.unlock_eligible else "alert"
 
-    st.plotly_chart(_build_rubric_radar(report.rubric_scores), use_container_width=True)
+    st.markdown("### Latest Feedback Snapshot")
+    metric_cols = st.columns([1.2, 1.1, 1.2])
+    with metric_cols[0]:
+        st.metric("Overall Score", score_label)
+    with metric_cols[1]:
+        st.metric("Rubric Dimensions", "4")
+    with metric_cols[2]:
+        st.markdown(_pill(f"Unlock: {unlock_label}", unlock_tone), unsafe_allow_html=True)
 
-    st.markdown("### Rubric")
-    for key, score in report.rubric_scores.items():
-        label = key.replace("_", " ").title()
-        st.progress(min(score, 100) / 100)
-        st.markdown(f"- {label}: {score}")
+    with st.expander("Score and rubric view", expanded=False):
+        st.plotly_chart(_build_rubric_radar(report.rubric_scores), use_container_width=True)
+        for key, score in report.rubric_scores.items():
+            label = key.replace("_", " ").title()
+            st.progress(min(score, 100) / 100)
+            st.markdown(f"- {label}: {score}")
 
-    st.markdown("### Strengths")
-    for item in report.strengths:
-        st.markdown(f"- {item}")
+    col_left, col_right = st.columns(2)
+    with col_left:
+        with st.container(border=True):
+            st.markdown("### Strengths")
+            for item in report.strengths:
+                st.markdown(f"- {html.escape(item)}")
+    with col_right:
+        with st.container(border=True):
+            st.markdown("### Craft Risks")
+            for item in report.craft_risks:
+                st.markdown(f"- {html.escape(item)}")
 
-    st.markdown("### Craft Risks")
-    for item in report.craft_risks:
-        st.markdown(f"- {item}")
+    with st.container(border=True):
+        st.markdown("### Revision Plan")
+        for item in report.revision_plan:
+            st.markdown(f"- {html.escape(item)}")
 
-    st.markdown("### Line Notes")
-    for note in report.line_notes:
-        st.markdown(
-            f"- Line {note.line_number}: {note.text_excerpt[:120]} — {note.comment} ({note.citation or 'p.0'})"
-        )
+    with st.expander("Line Notes", expanded=False):
+        for note in report.line_notes:
+            st.markdown(
+                f"- Line {note.line_number}: {html.escape(note.text_excerpt[:120])} — "
+                f"{html.escape(note.comment)} ({note.citation or 'p.0'})"
+            )
 
-    st.markdown("### Revision Plan")
-    for item in report.revision_plan:
-        st.markdown(f"- {item}")
-
-    st.caption(f"Unlock eligible: {report.unlock_eligible}")
     st.caption(f"Saved at: {latest['created_at']}")
+
+
+def _render_revision_mission(mission: RevisionMission | None) -> None:
+    """Render active revision mission details and completion control."""
+
+    st.markdown("### Revision Mission")
+    if mission is None:
+        st.info("No active mission yet. Submit a draft to create one.")
+        return
+
+    focus_label = mission.focus_dimension.replace("_", " ").title()
+    with st.container(border=True):
+        st.markdown(f"#### {html.escape(mission.title)}")
+        status_tone = "ok" if mission.status == "completed" else "warn"
+        st.markdown(
+            f"{_pill('Focus: ' + focus_label, 'info')} {_pill('Status: ' + mission.status, status_tone)}",
+            unsafe_allow_html=True,
+        )
+        st.markdown(html.escape(mission.instructions))
+        st.markdown("**Checklist**")
+        for item in mission.checklist:
+            st.markdown(f"- {html.escape(item)}")
+
+        if mission.status == "active" and mission.id is not None:
+            if st.button("Mark mission complete", key=f"complete_mission_{mission.id}"):
+                storage.complete_revision_mission(int(mission.id))
+                st.success("Mission marked complete.")
+                st.rerun()
 
 
 def _render_journal(attempts: List[Dict[str, object]], unit_ids: List[str]) -> None:
@@ -217,8 +399,9 @@ def _render_journal(attempts: List[Dict[str, object]], unit_ids: List[str]) -> N
         st.info("No prior attempts yet.")
         return
 
-    st.markdown("### Score trend")
-    _render_attempt_trend(attempts)
+    with st.container(border=True):
+        st.markdown("### Score trend")
+        _render_attempt_trend(attempts)
 
     attempts_chron = list(reversed(attempts))
     def format_attempt_label(index: int, attempt: Dict[str, object]) -> str:
@@ -226,7 +409,9 @@ def _render_journal(attempts: List[Dict[str, object]], unit_ids: List[str]) -> N
 
     st.markdown("### Compare drafts")
     options = range(len(attempts_chron))
-    attempt_labels = {idx: format_attempt_label(idx, attempt) for idx, attempt in enumerate(attempts_chron)}
+    attempt_labels = {
+        idx: format_attempt_label(idx, attempt) for idx, attempt in enumerate(attempts_chron)
+    }
 
     left_col, right_col = st.columns(2)
     with left_col:
@@ -310,8 +495,10 @@ def _render_journal(attempts: List[Dict[str, object]], unit_ids: List[str]) -> N
 def main() -> None:
     """Render the main course interface."""
 
-    st.title("Interactive Fiction Writing Course")
-    units, all_chunks, exercise_map = _load_assets()
+    _inject_app_style()
+    st.title("Writer Course")
+    st.markdown("### Interactive writing coach for PDF-based learning units")
+    units, all_chunks, exercise_map, lesson_pack_map = _load_assets()
     unit_ids = [unit.id for unit in units]
     unit_lookup = {unit.id: unit for unit in units}
 
@@ -324,9 +511,17 @@ def main() -> None:
         )
 
     st.subheader("Home")
-    st.progress(len(progress.unlocked_units) / max(1, len(units)))
+    home_left, home_right = st.columns([2, 1])
+    with home_left:
+        st.progress(len(progress.unlocked_units) / max(1, len(units)))
+    with home_right:
+        st.markdown(
+            f"{_pill(f'{len(progress.unlocked_units)} / {len(units)} unlocked', 'ok')} "
+            f"{_pill('Current: ' + progress.current_unit_id, 'info')}",
+            unsafe_allow_html=True,
+        )
     st.write(
-        f"Unlocked units: {len(progress.unlocked_units)}/{len(units)} — "
+        f"Unlocked units: {len(progress.unlocked_units)}/{len(units)} · "
         f"Current unit: {progress.current_unit_id}"
     )
     _render_home_progress(unit_ids, progress.best_score_by_unit)
@@ -347,11 +542,12 @@ def main() -> None:
     selected_unit = unit_lookup[selected_unit_id]
     chunks = [chunk for chunk in all_chunks if chunk.get("unit_id") == selected_unit_id]
     unit_exercises = exercise_map.get(selected_unit_id, [])
+    lesson_pack = lesson_pack_map.get(selected_unit_id)
 
     tabs = st.tabs(["Learn", "Practice", "Feedback", "Coach", "Journal / History"])
 
     with tabs[0]:
-        _render_lesson(selected_unit, chunks)
+        _render_lesson(selected_unit, chunks, lesson_pack)
 
     with tabs[1]:
         st.subheader("Practice")
@@ -373,6 +569,7 @@ def main() -> None:
                 value=st.session_state[draft_key],
                 height=260,
                 key=draft_input_key,
+                placeholder="Type your scene, chapter, or exercise draft here.",
             )
             st.caption(f"Word count: {len((draft or "").split())}")
 
@@ -396,35 +593,116 @@ def main() -> None:
                 storage.save_draft(selected_unit_id, draft)
                 with st.spinner("Running deep course review..."):
                     report = feedback_engine.evaluate_draft(selected_unit, draft, chunks)
-                progress = storage.add_feedback_attempt(
+                progress, attempt_id = storage.add_feedback_attempt_with_id(
                     progress,
                     selected_unit_id,
                     draft,
                     report,
                     unit_ids,
                 )
+                storage.supersede_active_revision_missions(selected_unit_id, attempt_id)
+                mission = revision_engine.build_revision_mission(
+                    selected_unit,
+                    report,
+                    draft,
+                    chunks,
+                )
+                mission.attempt_id = attempt_id
+                storage.save_revision_mission(mission)
                 st.success("Feedback complete and saved.")
 
         attempts = storage.get_attempts_for_unit(selected_unit_id)
         _show_feedback_unit(selected_unit_id, attempts)
+        active_mission = storage.get_active_revision_mission(selected_unit_id)
+        _render_revision_mission(active_mission)
 
     with tabs[3]:
         st.subheader("Coach")
         question_key = f"question_{selected_unit_id}"
         question = st.text_area("Ask a question about the current unit", key=question_key)
-        if st.button("Ask coach"):
+        if st.button("Ask coach", use_container_width=True):
             if not question.strip():
                 st.error("Ask a question first.")
             else:
-                answer = coach_engine.answer_question(selected_unit_id, question, chunks)
-                storage.save_chat_turn(selected_unit_id, question, answer)
-                st.info(answer)
+                coach_answer = coach_engine.ask_question(selected_unit_id, question, chunks)
+                storage.save_chat_turn(
+                    selected_unit_id,
+                    question,
+                    coach_answer.answer,
+                    citations=coach_answer.citations,
+                    evidence=[item.to_dict() for item in coach_answer.evidence],
+                    confidence=coach_answer.confidence,
+                )
+                with st.container(border=True):
+                    st.markdown("### Coach Answer")
+                    st.markdown(f"{coach_answer.answer}")
+                    if coach_answer.is_refusal:
+                        st.warning("Scope note: course-only response policy applied.")
+                    else:
+                        st.markdown(
+                            f"{_pill('Citations: ' + str(len(coach_answer.citations)), 'info')} "
+                            f"{_pill('Evidence: ' + str(len(coach_answer.evidence)), 'muted')} "
+                            f"{_pill('Confidence: ' + _confidence_label(coach_answer.confidence), _confidence_tone(coach_answer.confidence))}",
+                            unsafe_allow_html=True,
+                        )
+                    if coach_answer.citations:
+                        st.markdown("**Citations:**")
+                        st.markdown(
+                            "<div>"
+                            + "".join(
+                                f"<span class='wc-citation'>{html.escape(citation)}</span> "
+                                for citation in coach_answer.citations
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    if coach_answer.evidence:
+                        st.markdown("**Evidence:**")
+                        for item in coach_answer.evidence:
+                            st.markdown(
+                                f"<div class='wc-evidence'>"
+                                f"\"{html.escape(item.quote)}\" "
+                                f"<span class='wc-citation'>{html.escape(item.citation)}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
 
         st.markdown("### Recent coach turns")
         for turn in storage.get_chat_turns(selected_unit_id, limit=3):
-            st.markdown(f"**Q:** {turn['question']}")
-            st.markdown(f"**A:** {turn['answer']}")
-            st.markdown(f"_at {turn['created_at']}_")
+            with st.expander(f"{turn['created_at']} — confidence: "
+                            f"{_confidence_label(turn.get('confidence') if turn.get('confidence') is not None else None)}"):
+                st.markdown(f"**Q:** {html.escape(turn['question'])}")
+                st.markdown(f"**A:** {html.escape(turn['answer'])}")
+                if turn.get("confidence") is not None:
+                    confidence_value = float(turn["confidence"])
+                    st.markdown(
+                        f"{_pill(f'Score: {confidence_value:.2f}', _confidence_tone(confidence_value))} "
+                        f"{_pill('Citations: ' + str(len(turn.get('citations', []))), 'info')}",
+                        unsafe_allow_html=True,
+                    )
+                if turn.get("citations"):
+                    st.markdown("Citations:")
+                    st.markdown(
+                        "<div>"
+                        + "".join(
+                            f"<span class='wc-citation'>{html.escape(str(citation))}</span> "
+                            for citation in turn.get("citations", [])
+                        )
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                evidence = turn.get("evidence", [])
+                if evidence:
+                    st.markdown("Evidence:")
+                    for item in evidence:
+                        quote = str(item.get("quote", "")).strip()
+                        citation = str(item.get("citation", "p.0")).strip()
+                        if quote:
+                            st.markdown(
+                                f"<div class='wc-evidence'>\"{html.escape(quote)}\" "
+                                f"<span class='wc-citation'>{html.escape(citation)}</span></div>",
+                                unsafe_allow_html=True,
+                            )
 
     with tabs[4]:
         attempts = storage.get_attempts_for_unit(selected_unit_id)
