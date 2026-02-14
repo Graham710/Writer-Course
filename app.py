@@ -170,7 +170,7 @@ def _show_feedback_unit(unit_id: str, attempts: List[dict]) -> None:
     """Render feedback summary for the latest attempt on a unit."""
 
     if not attempts:
-        st.info("No feedback yet. Submit a draft to unlock the next unit when your score is 85/100 or higher.")
+        st.info("No feedback yet. Submit a draft to generate the next feedback pass.")
         return
 
     latest = attempts[0]
@@ -319,9 +319,8 @@ def main() -> None:
     progress.last_opened_at = st.session_state.get("last_opened_at", progress.last_opened_at)
 
     if not has_openai_api_key():
-        st.warning(
-            "OpenAI API key missing. Add OPENAI_API_KEY to your environment and restart. "
-            "AI feedback and coach actions are disabled until provided."
+        st.info(
+            "OpenAI API key missing. Submitting drafts or asking coach questions will use local fallback feedback and course-context citations."
         )
 
     st.subheader("Home")
@@ -382,13 +381,11 @@ def main() -> None:
                 submit_clicked = st.form_submit_button(
                     "Submit Draft",
                     use_container_width=True,
-                    disabled=not has_openai_api_key(),
                 )
             with col_resubmit:
                 resubmit_clicked = st.form_submit_button(
                     "Rework and Resubmit",
                     use_container_width=True,
-                    disabled=not has_openai_api_key(),
                 )
 
         if submit_clicked or resubmit_clicked:
@@ -415,7 +412,7 @@ def main() -> None:
         st.subheader("Coach")
         question_key = f"question_{selected_unit_id}"
         question = st.text_area("Ask a question about the current unit", key=question_key)
-        if st.button("Ask coach", disabled=not has_openai_api_key()):
+        if st.button("Ask coach"):
             if not question.strip():
                 st.error("Ask a question first.")
             else:
