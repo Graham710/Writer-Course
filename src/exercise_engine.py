@@ -21,7 +21,20 @@ _IMPERATIVE_PATTERNS = [
 ]
 
 
+
 def extract_directive_lines(texts: List[Dict[str, object]], max_items: int = 3) -> List[str]:
+    """Extract candidate directive-style lines from chunked lesson text.
+
+    Args:
+        texts:
+            A list of chunk dictionaries loaded from PDF ingestion.
+        max_items:
+            Maximum number of directive candidates to return.
+
+    Returns:
+        A list of cleaned directive strings, capped at ``max_items``.
+    """
+
     directives: List[str] = []
     for chunk in texts:
         chunk_text = str(chunk.get("text", ""))
@@ -36,7 +49,65 @@ def extract_directive_lines(texts: List[Dict[str, object]], max_items: int = 3) 
     return directives
 
 
+
+def _is_valid_exercise_cache(
+    payload: object, unit_ids: List[str]
+) -> Dict[str, List[ExerciseSpec]] | None:
+    """Validate cached exercise payload shape and unit coverage.
+
+    Args:
+        payload:
+            Raw JSON payload from the cache file.
+        unit_ids:
+            Unit IDs currently in the catalog.
+
+    Returns:
+        Parsed cache as ``dict[str, list[ExerciseSpec]]`` when valid,
+        otherwise ``None``.
+    """
+
+    if not isinstance(payload, list):
+        return None
+
+    mapped: Dict[str, List[ExerciseSpec]] = {}
+    try:
+        for item in payload:
+            spec = ExerciseSpec.from_dict(item)
+            mapped.setdefault(spec.unit_id, []).append(spec)
+    except Exception:
+        return None
+
+    if set(mapped.keys()) != set(unit_ids):
+        return None
+
+    for unit_id in unit_ids:
+        specs = mapped[unit_id]
+        if len(specs) != 2:
+            return None
+        kinds = [spec.kind for spec in specs]
+        if kinds.count("core") != 1 or kinds.count("stretch") != 1:
+            return None
+    return mapped
+
+
+
 def _make_prompt(unit: CourseUnit, objective: str, mode: str, source_mode: str) -> ExerciseSpec:
+    """Create one exercise prompt for a unit with a defined objective.
+
+    Args:
+        unit:
+            Source unit metadata.
+        objective:
+            Exercise objective text.
+        mode:
+            ``core`` or ``stretch``.
+        source_mode:
+            Indicates whether source text or generic generation produced it.
+
+    Returns:
+        A fully populated :class:`ExerciseSpec`.
+    """
+
     constraints = [
         "Keep the prompt strictly in the craft scope of this unit only.",
         "Use only one clear narrative line, no essay-length analysis.",
@@ -79,13 +150,19 @@ def _make_prompt(unit: CourseUnit, objective: str, mode: str, source_mode: str) 
     )
 
 
+
 def _default_objective(unit: CourseUnit) -> str:
+    """Return a fallback exercise objective for units with no directives."""
+
     if unit.learning_objectives:
         return unit.learning_objectives[0]
     return f"Practice applying the core principle in {unit.title}."
 
 
+
 def build_exercises_for_unit(unit: CourseUnit, chunks: List[Dict[str, object]]) -> List[ExerciseSpec]:
+    """Build the core and stretch prompts for a single course unit."""
+
     directives = extract_directive_lines(chunks)
 
     if directives:
@@ -111,38 +188,36 @@ def build_exercises_for_unit(unit: CourseUnit, chunks: List[Dict[str, object]]) 
     return [core, stretch]
 
 
+
 def load_or_build_exercises(
     units: List[CourseUnit],
     unit_chunks: Dict[str, List[Dict[str, object]]],
 ) -> Dict[str, List[ExerciseSpec]]:
+    """Load cached exercises, or build and persist fresh ones per unit.
+
+    Cache is rebuilt when the payload is malformed, stale, or doesn't contain a
+    single ``core`` and ``stretch`` exercise per current unit.
+    """
+
     data_dir().mkdir(parents=True, exist_ok=True)
     path = exercises_path()
     payload: List[dict] = []
+    unit_ids = [unit.id for unit in units]
+
     if path.exists():
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, list) and raw:
-                # Validate and convert to typed objects when possible.
-                mapped: Dict[str, List[ExerciseSpec]] = {}
-                try:
-                    for item in raw:
-                        spec = ExerciseSpec.from_dict(item)
-                        mapped.setdefault(spec.unit_id, []).append(spec)
-                    if {unit.id for unit in units} == set(mapped.keys()) and all(
-                        len(mapped[u.id]) >= 2 for u in units
-                    ):
-                        return mapped
-                except Exception:
-                    pass
+            cached = _is_valid_exercise_cache(raw, unit_ids)
+            if cached is not None:
+                return cached
         except Exception:
             pass
 
-    mapped = {}
+    mapped: Dict[str, List[ExerciseSpec]] = {}
     for unit in units:
         chunks = unit_chunks.get(unit.id, [])
         mapped[unit.id] = build_exercises_for_unit(unit, chunks)
-        for spec in mapped[unit.id]:
-            payload.extend(spec.to_dict() for spec in mapped[unit.id])
+        payload.extend(spec.to_dict() for spec in mapped[unit.id])
 
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return mapped

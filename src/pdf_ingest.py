@@ -12,6 +12,17 @@ from .types import CourseUnit
 
 
 def extract_page_texts(pdf_path: Path | None = None) -> List[str]:
+    """Load text for each page from the configured PDF.
+
+    Args:
+        pdf_path:
+            Optional explicit path to a PDF file. When omitted, resolves from
+            ``WRITER_COURSE_PDF_PATH`` or project discovery.
+
+    Returns:
+        A list of normalized page texts.
+    """
+
     pdf_path = pdf_path or get_pdf_path()
 
     try:
@@ -33,11 +44,15 @@ def extract_page_texts(pdf_path: Path | None = None) -> List[str]:
 
 
 def _normalize(text: str) -> str:
+    """Normalize whitespace in extracted text."""
+
     cleaned = re.sub(r"\s+", " ", text or "").strip()
     return cleaned
 
 
 def _split_into_chunks(text: str, max_chars: int) -> List[str]:
+    """Split text into sentence-based chunks bounded by ``max_chars``."""
+
     if not text:
         return [""]
     if len(text) <= max_chars:
@@ -69,6 +84,8 @@ def _split_into_chunks(text: str, max_chars: int) -> List[str]:
 
 
 def _unit_cache_fingerprint(units: List[CourseUnit]) -> Dict[str, object]:
+    """Build a stable representation of current unit layout boundaries."""
+
     return {
         "unit_count": len(units),
         "units": [
@@ -79,15 +96,27 @@ def _unit_cache_fingerprint(units: List[CourseUnit]) -> Dict[str, object]:
 
 
 def _cache_compatible(payload: dict, pdf_path: Path, units: List[CourseUnit]) -> bool:
-    if not payload:
+    """Check whether a cached payload matches current rendering inputs."""
+
+    if not isinstance(payload, dict):
         return False
-    if payload.get("source_pdf") != str(pdf_path):
+    if payload.get("source_pdf") != pdf_path.name:
         return False
-    cached_units = payload.get("unit_layout", {})
-    return cached_units == _unit_cache_fingerprint(units)
+
+    cached_units = payload.get("unit_layout")
+    if cached_units != _unit_cache_fingerprint(units):
+        return False
+
+    chunk_config = payload.get("chunk_config")
+    if not isinstance(chunk_config, dict):
+        return False
+
+    return chunk_config.get("max_chars") == chunk_chars()
 
 
 def _read_cached_chunks() -> Dict[str, object]:
+    """Load the chunks cache payload if present and JSON-decodable."""
+
     path = chunks_path()
     if not path.exists():
         return {}
@@ -98,6 +127,8 @@ def _read_cached_chunks() -> Dict[str, object]:
 
 
 def load_or_build_chunks(units: List[CourseUnit]) -> List[Dict[str, object]]:
+    """Return all unit chunks, using cache when configuration and layout match."""
+
     data_dir().mkdir(parents=True, exist_ok=True)
     path = chunks_path()
 
@@ -142,8 +173,9 @@ def load_or_build_chunks(units: List[CourseUnit]) -> List[Dict[str, object]]:
         unit.source_chunks = source_ids
 
     payload = {
-        "source_pdf": str(pdf_path),
+        "source_pdf": pdf_path.name,
         "unit_layout": _unit_cache_fingerprint(units),
+        "chunk_config": {"max_chars": max_chars},
         "generated_at": __import__("datetime").datetime.utcnow().isoformat(),
         "chunks": all_chunks,
     }
@@ -152,4 +184,6 @@ def load_or_build_chunks(units: List[CourseUnit]) -> List[Dict[str, object]]:
 
 
 def chunks_by_unit(unit: CourseUnit, chunks: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Filter all chunks for a specific unit id."""
+
     return [chunk for chunk in chunks if chunk.get("unit_id") == unit.id]

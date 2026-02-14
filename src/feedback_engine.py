@@ -60,9 +60,9 @@ def _fallback_report(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, o
 
     lines = [line.strip() for line in re.split(r"\n+", text) if line.strip()]
     concept = min(100, 35 + objective_hits)
-    narrative = min(100, 30 + min(120, len(lines) * 8) + (20 if text else 0))
-    language = min(100, 35 + int(len(set(text.split())) * 0.7) + (10 if any(word in draft_lower for word in ["show", "scene", "voice", "tone"]) else 0))
-    revision = min(100, 20 + len(lines) * 6 + (15 if len(text) > 200 else 0))
+    narrative = min(100, 20 + min(90, len(lines) * 3) + (10 if text else 0))
+    language = min(100, 28 + int(len(set(text.split())) * 0.3) + (8 if any(word in draft_lower for word in ["show", "scene", "voice", "tone"]) else 0))
+    revision = min(100, 14 + len(lines) * 2 + (12 if len(text) > 200 else 0))
     rubric = {
         "concept_application": concept,
         "narrative_effectiveness": narrative,

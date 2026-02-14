@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.db
+.pytest_cache/
+writer_course_state.db
+data/chunks.json
+data/exercises.json

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 from .config import db_path, unlock_threshold
 from .types import ChatTurn, FeedbackReport, ProgressRecord
@@ -104,6 +104,8 @@ def load_progress(unit_ids: List[str]) -> ProgressRecord:
 
 
 def persist_progress(progress: ProgressRecord, conn=None) -> None:
+    """Persist the progress envelope back to SQLite."""
+
     conn = conn or _connection()
     init_db(conn)
     payload = progress.to_dict()
@@ -130,6 +132,8 @@ def persist_progress(progress: ProgressRecord, conn=None) -> None:
 
 
 def set_current_unit(progress: ProgressRecord, unit_id: str) -> ProgressRecord:
+    """Persist selection if the unit is unlocked and return updated progress."""
+
     if unit_id in progress.unlocked_units:
         progress.current_unit_id = unit_id
         persist_progress(progress)
@@ -152,6 +156,8 @@ def add_feedback_attempt(
     report: FeedbackReport,
     all_unit_ids: List[str],
 ) -> ProgressRecord:
+    """Record an attempt and unlock the next unit when threshold is met."""
+
     conn = _connection()
     init_db(conn)
     now = datetime.utcnow().isoformat()
@@ -179,6 +185,8 @@ def add_feedback_attempt(
 
 
 def save_draft(unit_id: str, text: str) -> None:
+    """Persist draft text for a unit in the `drafts` table."""
+
     conn = _connection()
     init_db(conn)
     now = datetime.utcnow().isoformat()
@@ -192,6 +200,8 @@ def save_draft(unit_id: str, text: str) -> None:
 
 
 def get_draft(unit_id: str) -> str:
+    """Load persisted draft for a unit."""
+
     conn = _connection()
     init_db(conn)
     row = conn.execute("SELECT draft FROM drafts WHERE unit_id = ?", (unit_id,)).fetchone()
@@ -202,6 +212,8 @@ def get_draft(unit_id: str) -> str:
 
 
 def get_attempts_for_unit(unit_id: str, limit: int | None = None) -> List[Dict[str, object]]:
+    """Fetch attempt rows for a unit, newest first."""
+
     conn = _connection()
     init_db(conn)
     q = "SELECT id, unit_id, draft, overall_score, feedback_json, created_at FROM attempts WHERE unit_id = ? ORDER BY id DESC"
@@ -213,6 +225,8 @@ def get_attempts_for_unit(unit_id: str, limit: int | None = None) -> List[Dict[s
 
 
 def get_latest_feedback_for_unit(unit_id: str) -> FeedbackReport | None:
+    """Return latest attempt feedback for a unit, if present."""
+
     attempts = get_attempts_for_unit(unit_id, limit=1)
     if not attempts:
         return None
@@ -220,6 +234,8 @@ def get_latest_feedback_for_unit(unit_id: str) -> FeedbackReport | None:
 
 
 def save_chat_turn(unit_id: str, question: str, answer: str, citations: List[str] | None = None) -> None:
+    """Persist a coach interaction turn."""
+
     conn = _connection()
     init_db(conn)
     citations_json = json.dumps(citations or [])
@@ -233,6 +249,8 @@ def save_chat_turn(unit_id: str, question: str, answer: str, citations: List[str
 
 
 def get_chat_turns(unit_id: str, limit: int | None = None) -> List[Dict[str, object]]:
+    """Fetch recent coach turns for a unit, newest first."""
+
     conn = _connection()
     init_db(conn)
     q = "SELECT question, answer, created_at, citations FROM chat_turns WHERE unit_id = ? ORDER BY id DESC"
@@ -244,6 +262,8 @@ def get_chat_turns(unit_id: str, limit: int | None = None) -> List[Dict[str, obj
 
 
 def get_all_attempts() -> List[Dict[str, object]]:
+    """Fetch all attempts across all units."""
+
     conn = _connection()
     init_db(conn)
     rows = conn.execute(
@@ -251,3 +271,54 @@ def get_all_attempts() -> List[Dict[str, object]]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def export_portfolio(unit_ids: List[str]) -> Dict[str, object]:
+    """Compile all unit attempts and core progress metadata into one export structure."""
+
+    unit_set = set(unit_ids)
+    progress = load_progress(unit_ids)
+
+    conn = _connection()
+    init_db(conn)
+    if unit_ids:
+        rows = conn.execute(
+            "SELECT id, unit_id, draft, overall_score, feedback_json, created_at FROM attempts WHERE unit_id IN ({}) ORDER BY created_at ASC".format(
+                ",".join("?" for _ in unit_ids)
+            ),
+            unit_ids,
+        ).fetchall()
+    else:
+        rows = []
+    conn.close()
+
+    attempts_by_unit: Dict[str, List[Dict[str, object]]] = {unit_id: [] for unit_id in unit_set}
+    for row in rows:
+        unit_id = row["unit_id"]
+        if unit_id in unit_set:
+            attempts_by_unit.setdefault(unit_id, []).append(
+                {
+                    "id": row["id"],
+                    "draft": row["draft"],
+                    "overall_score": row["overall_score"],
+                    "feedback": json.loads(row["feedback_json"]),
+                    "created_at": row["created_at"],
+                }
+            )
+
+    ordered_units = [
+        {
+            "unit_id": unit_id,
+            "attempts": attempts_by_unit.get(unit_id, []),
+        }
+        for unit_id in unit_ids
+    ]
+
+    return {
+        "exported_at": datetime.utcnow().isoformat(),
+        "units": ordered_units,
+        "current_unit_id": progress.current_unit_id,
+        "unlocked_units": progress.unlocked_units,
+        "best_score_by_unit": progress.best_score_by_unit,
+        "attempts_count": sum(len(attempts) for attempts in attempts_by_unit.values()),
+    }
