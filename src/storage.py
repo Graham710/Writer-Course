@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, List
 
-from .config import db_path, unlock_threshold
+from .config import db_path
 from .types import ChatTurn, FeedbackReport, ProgressRecord
 
 
@@ -156,7 +156,7 @@ def add_feedback_attempt(
     report: FeedbackReport,
     all_unit_ids: List[str],
 ) -> ProgressRecord:
-    """Record an attempt and unlock the next unit when threshold is met."""
+    """Record an attempt and unlock the next unit on the submission."""
 
     conn = _connection()
     init_db(conn)
@@ -171,7 +171,7 @@ def add_feedback_attempt(
         progress.best_score_by_unit.get(unit_id, 0), report.overall_score
     )
 
-    if report.overall_score >= unlock_threshold() and unit_id in all_unit_ids:
+    if unit_id in all_unit_ids:
         nxt = _next_unit_id(unit_id, all_unit_ids)
         if nxt and nxt not in progress.unlocked_units:
             progress.unlocked_units.append(nxt)
