@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 from typing import Dict, List
 
 from . import types
@@ -17,6 +18,38 @@ RUBRIC_DIMENSIONS = [
     "language_precision",
     "revision_readiness",
 ]
+
+_REASONING_EFFORT_OPTIONS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+_FAST_MAX_CHARS = 900
+_DEEP_MIN_CHARS = 2200
+
+
+def _read_env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value
+
+
+def _read_env_int(name: str, default: int | None) -> int | None:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value
+
+
+def _read_reasoning_effort(level: str, default: str) -> str:
+    raw = os.getenv(f"OPENAI_FEEDBACK_{level.upper()}_REASONING_EFFORT", "")
+    effort = raw.strip().lower()
+    return effort if effort in _REASONING_EFFORT_OPTIONS else default
 
 
 def _fallback_report(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, object]]) -> FeedbackReport:
@@ -78,6 +111,36 @@ def _fallback_report(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, o
         revision_plan=revision_plan,
         unlock_eligible=overall >= unlock_threshold(),
     )
+
+
+def _feedback_profile(draft_text: str) -> str:
+    text = (draft_text or "").strip()
+    if len(text) <= _FAST_MAX_CHARS:
+        return "FAST"
+    if len(text) >= _DEEP_MIN_CHARS:
+        return "DEEP"
+    return "STANDARD"
+
+
+def _feedback_runtime_options(draft_text: str) -> Dict[str, object]:
+    profile = _feedback_profile(draft_text)
+    if profile == "FAST":
+        return {
+            "temperature": _read_env_float("OPENAI_FEEDBACK_FAST_TEMPERATURE", 0.12),
+            "max_output_tokens": _read_env_int("OPENAI_FEEDBACK_FAST_MAX_OUTPUT_TOKENS", 500),
+            "reasoning_effort": _read_reasoning_effort(profile, "low"),
+        }
+    if profile == "DEEP":
+        return {
+            "temperature": _read_env_float("OPENAI_FEEDBACK_DEEP_TEMPERATURE", 0.18),
+            "max_output_tokens": _read_env_int("OPENAI_FEEDBACK_DEEP_MAX_OUTPUT_TOKENS", 2000),
+            "reasoning_effort": _read_reasoning_effort(profile, "high"),
+        }
+    return {
+        "temperature": _read_env_float("OPENAI_FEEDBACK_STANDARD_TEMPERATURE", 0.15),
+        "max_output_tokens": _read_env_int("OPENAI_FEEDBACK_STANDARD_MAX_OUTPUT_TOKENS", 1000),
+        "reasoning_effort": _read_reasoning_effort(profile, "medium"),
+    }
 
 
 def _parse_json_object(raw: str) -> Dict:
@@ -189,19 +252,7 @@ def _build_prompt(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, obje
         [f"[p.{item['page']}] {item['text'][:700]}" for item in chunks[:8]]
     )
     objectives = "; ".join(unit.learning_objectives)
-    prompt = f"""You are a strict literary writing coach. Review only the provided course unit context.
-
-Unit {unit.id}: {unit.title}
-Learning objectives: {objectives}
-
-Course context:
-{chunk_summary}
-
-Student draft:
-{draft_text}
-
-Return JSON with this exact schema:
-{
+    schema = """{
   "overall_score": int,
   "rubric_scores": {
     "concept_application": int,
@@ -216,7 +267,20 @@ Return JSON with this exact schema:
   ],
   "revision_plan": [string list],
   "unlock_eligible": bool
-}
+}"""
+    prompt = f"""You are a strict literary writing coach. Review only the provided course unit context.
+
+Unit {unit.id}: {unit.title}
+Learning objectives: {objectives}
+
+Course context:
+{chunk_summary}
+
+Student draft:
+{draft_text}
+
+Return JSON with this exact schema:
+{schema}
 
 Rules:
 - Use only unit context and do not use external writing theory.
@@ -237,10 +301,20 @@ def evaluate_draft(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, obj
         from openai import OpenAI
 
         client = OpenAI(api_key=get_openai_api_key(), timeout=30)
+        runtime = _feedback_runtime_options(draft_text)
+        request_kwargs = {
+            "model": get_openai_model(),
+            "input": [{"role": "user", "content": prompt}],
+            "temperature": float(runtime["temperature"]),
+        }
+        max_output_tokens = runtime["max_output_tokens"]
+        if isinstance(max_output_tokens, int):
+            request_kwargs["max_output_tokens"] = max_output_tokens
+        reasoning_effort = runtime["reasoning_effort"]
+        if isinstance(reasoning_effort, str) and reasoning_effort in _REASONING_EFFORT_OPTIONS:
+            request_kwargs["reasoning"] = {"effort": reasoning_effort}
         response = client.responses.create(
-            model=get_openai_model(),
-            input=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            **request_kwargs,
         )
         raw = _extract_model_text(response)
         payload = _parse_json_object(raw)
