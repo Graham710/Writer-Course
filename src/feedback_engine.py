@@ -189,19 +189,7 @@ def _build_prompt(unit: CourseUnit, draft_text: str, chunks: List[Dict[str, obje
         [f"[p.{item['page']}] {item['text'][:700]}" for item in chunks[:8]]
     )
     objectives = "; ".join(unit.learning_objectives)
-    prompt = f"""You are a strict literary writing coach. Review only the provided course unit context.
-
-Unit {unit.id}: {unit.title}
-Learning objectives: {objectives}
-
-Course context:
-{chunk_summary}
-
-Student draft:
-{draft_text}
-
-Return JSON with this exact schema:
-{
+    schema = """{
   "overall_score": int,
   "rubric_scores": {
     "concept_application": int,
@@ -216,7 +204,20 @@ Return JSON with this exact schema:
   ],
   "revision_plan": [string list],
   "unlock_eligible": bool
-}
+}"""
+    prompt = f"""You are a strict literary writing coach. Review only the provided course unit context.
+
+Unit {unit.id}: {unit.title}
+Learning objectives: {objectives}
+
+Course context:
+{chunk_summary}
+
+Student draft:
+{draft_text}
+
+Return JSON with this exact schema:
+{schema}
 
 Rules:
 - Use only unit context and do not use external writing theory.
